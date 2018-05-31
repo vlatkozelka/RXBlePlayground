@@ -3,14 +3,12 @@ package com.example.ali.blemanager
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattService
-import android.content.BroadcastReceiver
 import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
 import android.os.Bundle
 import android.util.Log
+import com.example.ali.myapplication.BLEEvent
+import com.example.ali.myapplication.BLEState
 import com.example.ali.myapplication.DeviceValues
-import com.github.karczews.rxbroadcastreceiver.RxBroadcastReceivers
 import com.polidea.rxandroidble2.RxBleClient
 import com.polidea.rxandroidble2.RxBleConnection
 import com.polidea.rxandroidble2.RxBleDevice
@@ -21,7 +19,6 @@ import io.reactivex.Observable
 import io.reactivex.android.schedulers.AndroidSchedulers
 import io.reactivex.disposables.Disposable
 import io.reactivex.schedulers.Schedulers
-import junit.runner.Version.id
 import java.util.*
 import java.util.concurrent.TimeUnit
 
@@ -29,6 +26,8 @@ import java.util.concurrent.TimeUnit
  * Created by ali on 5/28/2018.
  */
 class BleManager {
+
+
     companion object {
 
         val KEY_BLE_NOTIFY_CHARACTERISTICS_UUID = "0000fff4-0000-1000-8000-00805f9b34fb"
@@ -47,13 +46,59 @@ class BleManager {
         private var notificationDisposable: Disposable? = null
         private var isDeviceBonded = false
         private lateinit var appContext: Context
+        private var state: BLEState = BLEState.initial()
+
+
+        fun BLEState.Companion.reduce(state: BLEState, event: BLEEvent): BLEState {
+            var newState = state.copy()
+            when (event) {
+                is BLEEvent.Scan -> {
+                    newState.isScanning = true
+                }
+                is BLEEvent.Connect -> {
+                    newState.connectionState = BLEState.ConnectionState.connecting
+                }
+                is BLEEvent.DiscoverServices -> {
+                    newState.isSearchingServices = true
+                }
+                is BLEEvent.FoundServices -> {
+                    newState.isSearchingServices = false
+                }
+                is BLEEvent.FindNotifyCharacteristic -> {
+                    newState.isSearchingServices = true
+                }
+                is BLEEvent.FoundNotifyCharacateristic -> {
+                    newState.hasNotifyCharacteristic = true
+                }
+                is BLEEvent.Bonded -> {
+                    newState.bondingState = BLEState.BondingState.bonded
+                }
+                is BLEEvent.ReadNotification -> {
+                    newState.deviceValues = event.deviceValues
+                }
+                is BLEEvent.Disconnect -> {
+                    newState.connectionState = BLEState.ConnectionState.disconnecting
+                }
+                is BLEEvent.Disconnected -> {
+                    newState.connectionState = BLEState.ConnectionState.disconnected
+                }
+                is BLEEvent.FinishedScanning -> {
+                    newState.isScanning = false
+                }
+            }
+            return newState
+        }
 
 
         @JvmStatic
         fun init(appContext: Context): RxBleClient {
             BleManager.appContext = appContext
+            state = BLEState.initial()
             return RxBleClient.create(appContext)
         }
+
+
+        //todo implement init that auto-selects a previously connected ble device
 
         fun startScan(): Observable<ScanResult> {
             return App.rxBleClient.scanBleDevices(

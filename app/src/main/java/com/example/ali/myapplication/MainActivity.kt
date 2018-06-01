@@ -5,14 +5,24 @@ import android.bluetooth.BluetoothDevice.BOND_BONDED
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Bundle
+import android.support.v4.content.ContextCompat.startActivity
 import android.support.v7.app.AppCompatActivity
 import android.util.Log
+import android.view.View
 import android.widget.TextView
 import com.example.ali.blemanager.BleManager
+import com.example.ali.myapplication.R.id.*
 import com.github.karczews.rxbroadcastreceiver.RxBroadcastReceivers
+import com.jakewharton.rxbinding2.view.RxView
 import com.polidea.rxandroidble2.RxBleDevice
+import io.reactivex.Observable
+import io.reactivex.android.schedulers.AndroidSchedulers
 import io.reactivex.disposables.Disposable
 import kotlinx.android.synthetic.main.activity_main.*
+import org.notests.rxfeedback.Bindings
+import org.notests.rxfeedback.Observables
+import org.notests.rxfeedback.bind
+import org.notests.rxfeedback.system
 import java.util.*
 
 /**
@@ -25,46 +35,63 @@ class MainActivity : AppCompatActivity() {
     private var scanDisposable: Disposable? = null
     private val devices = HashMap<String, RxBleDevice>()
     private var adapter: BleListAdapter? = null
-    private val devicesList: ArrayList<RxBleDevice>
-        get() {
-            val devices = ArrayList<RxBleDevice>()
-            devices.addAll(this.devices.values)
-            return devices
-        }
 
 
     private lateinit var valueTextView: TextView
+    private var bleDisposable: Disposable? = null
+
+
+    fun subscirbeToBle(): Disposable {
+        return Observables.system(
+                BLEState.initial(),
+                BLEState.Companion::reduce,
+                AndroidSchedulers.mainThread(),
+                listOf(
+                        BleManager.scanFeedback(),
+                        BleManager.connectFeedback(),
+                        bindBleUi
+                )
+        ).subscribe()
+    }
+
+    val bindBleUi = bind<BLEState, BLEState.BLEEvent> { bleState ->
+        val subscriptions = listOf<Disposable>(
+                bleState.source.map { it.isScanning }.subscribe { btn_scan.isEnabled = !it },
+                bleState.source.map { it.isScanning }.subscribe { scan_progress.isGone = !it },
+                bleState.source.map { it.devices }.subscribe {
+                    this.devices.putAll(it)
+                    adapter?.devices = it.values.toList()
+                }
+        )
+
+
+        val events = listOf<Observable<BLEState.BLEEvent>>(
+                RxView.clicks(btn_scan)
+                        .map {
+                            Log.d("BLE", "Scan button clicked")
+                            BLEState.BLEEvent.Scan()
+                        },
+                Observable.create<RxBleDevice> {
+                    adapter?.setListener { rxBleDevice ->
+                        it.onNext(rxBleDevice)
+                    }
+                }.map {
+                    BLEState.BLEEvent.Connect(it)
+                }
+        )
+
+        return@bind Bindings(subscriptions, events)
+    }
 
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-
+        bleDisposable = subscirbeToBle()
         valueTextView = txt_value
-        adapter = BleListAdapter(devicesList)
+        adapter = BleListAdapter(listOf<RxBleDevice>())
         listview_ble_devices.adapter = adapter
 
-
-        scanDisposable = BleManager.startScan()
-                .doFinally {
-                    Log.d("BLE", "Finished scanning")
-                    if (scanDisposable?.isDisposed == false) {
-                        scanDisposable?.dispose()
-                    }
-                }
-                .subscribe(
-                        { scanResult ->
-                            devices[scanResult.bleDevice.macAddress] = scanResult.bleDevice
-                            adapter?.devices = devicesList
-                        },
-                        { throwable ->
-                            throwable.printStackTrace()
-                        })
-
-
-        adapter!!.setListener { rxBleDevice ->
-            testConnect(rxBleDevice)
-        }
 
         btn_new_activity.setOnClickListener { startActivity(Intent(this, TestActivity::class.java)) }
     }
@@ -157,11 +184,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onPause() {
-        super.onPause()
         BleManager.stopReading()
+        bleDisposable?.dispose()
+        super.onPause()
     }
 
     override fun onResume() {
+        subscirbeToBle()
         super.onResume()
     }
 

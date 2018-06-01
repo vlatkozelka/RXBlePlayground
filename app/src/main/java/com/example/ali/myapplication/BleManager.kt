@@ -6,9 +6,11 @@ import android.bluetooth.BluetoothGattService
 import android.content.Context
 import android.os.Bundle
 import android.util.Log
-import com.example.ali.myapplication.BLEEvent
 import com.example.ali.myapplication.BLEState
+import com.example.ali.myapplication.BLEState.BLEEvent
 import com.example.ali.myapplication.DeviceValues
+import com.example.ali.myapplication.deviceToConnect
+import com.example.ali.myapplication.scanTime
 import com.polidea.rxandroidble2.RxBleClient
 import com.polidea.rxandroidble2.RxBleConnection
 import com.polidea.rxandroidble2.RxBleDevice
@@ -19,6 +21,10 @@ import io.reactivex.Observable
 import io.reactivex.android.schedulers.AndroidSchedulers
 import io.reactivex.disposables.Disposable
 import io.reactivex.schedulers.Schedulers
+import org.notests.rxfeedback.ObservableSchedulerContext
+import org.notests.rxfeedback.Observables
+import org.notests.rxfeedback.react
+import org.notests.rxfeedback.system
 import java.util.*
 import java.util.concurrent.TimeUnit
 
@@ -49,52 +55,49 @@ class BleManager {
         private var state: BLEState = BLEState.initial()
 
 
-        fun BLEState.Companion.reduce(state: BLEState, event: BLEEvent): BLEState {
-            var newState = state.copy()
-            when (event) {
-                is BLEEvent.Scan -> {
-                    newState.isScanning = true
-                }
-                is BLEEvent.Connect -> {
-                    newState.connectionState = BLEState.ConnectionState.connecting
-                }
-                is BLEEvent.DiscoverServices -> {
-                    newState.isSearchingServices = true
-                }
-                is BLEEvent.FoundServices -> {
-                    newState.isSearchingServices = false
-                }
-                is BLEEvent.FindNotifyCharacteristic -> {
-                    newState.isSearchingServices = true
-                }
-                is BLEEvent.FoundNotifyCharacateristic -> {
-                    newState.hasNotifyCharacteristic = true
-                }
-                is BLEEvent.Bonded -> {
-                    newState.bondingState = BLEState.BondingState.bonded
-                }
-                is BLEEvent.ReadNotification -> {
-                    newState.deviceValues = event.deviceValues
-                }
-                is BLEEvent.Disconnect -> {
-                    newState.connectionState = BLEState.ConnectionState.disconnecting
-                }
-                is BLEEvent.Disconnected -> {
-                    newState.connectionState = BLEState.ConnectionState.disconnected
-                }
-                is BLEEvent.FinishedScanning -> {
-                    newState.isScanning = false
-                }
-            }
-            return newState
-        }
-
-
         @JvmStatic
         fun init(appContext: Context): RxBleClient {
             BleManager.appContext = appContext
             state = BLEState.initial()
-            return RxBleClient.create(appContext)
+            rxBleClient = RxBleClient.create(appContext)
+            return rxBleClient
+        }
+
+
+        fun scanFeedback(): (ObservableSchedulerContext<BLEState>) -> Observable<BLEState.BLEEvent> {
+            return react<BLEState, Long, BLEState.BLEEvent>(
+                    query = { bleState: BLEState ->
+                        bleState.scanTime()
+                    },
+                    effects = { scanTime ->
+                        val scanObservable = BleManager.rxBleClient.scanBleDevices(
+                                ScanSettings.Builder()
+                                        .setScanMode(ScanSettings.SCAN_MODE_BALANCED)
+                                        .build(),
+                                ScanFilter.Builder()
+                                        .build()
+                        )
+                                .takeUntil(Observable.timer(scanTime, TimeUnit.SECONDS))
+                                .map {scanResult->
+                                    BLEState.BLEEvent.FoundDevice(scanResult)
+                                }
+                        Observable.concat(scanObservable, Observable.just(BLEEvent.FinishedScanning()))
+                    }
+            )
+        }
+
+        fun connectFeedback(): (ObservableSchedulerContext<BLEState>) -> Observable<BLEState.BLEEvent> {
+            return react<BLEState, RxBleDevice, BLEEvent>(
+                    query = { bleState: BLEState ->
+                        bleState.deviceToConnect()
+                    },
+                    effects = { rxBleDevice ->
+                        rxBleDevice.establishConnection(false)
+                                .map { connection: RxBleConnection ->
+                                    BLEEvent.Connected(connection)
+                                }
+                    }
+            )
         }
 
 

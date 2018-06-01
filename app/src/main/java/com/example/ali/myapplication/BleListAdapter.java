@@ -10,16 +10,17 @@ import android.widget.TextView;
 import com.polidea.rxandroidble2.RxBleDevice;
 
 import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Created by ali on 4/19/2018.
  */
 
 public class BleListAdapter extends BaseAdapter {
-    private ArrayList<RxBleDevice> devices;
+    private List<RxBleDevice> devices;
     private Listener listener;
 
-    public BleListAdapter(ArrayList<RxBleDevice> devices) {
+    public BleListAdapter(List<RxBleDevice> devices) {
         this.devices = devices;
     }
 
@@ -67,12 +68,12 @@ public class BleListAdapter extends BaseAdapter {
         return v;
     }
 
-    public void setDevices(ArrayList<RxBleDevice> devices) {
+    public void setDevices(List<RxBleDevice> devices) {
         this.devices = devices;
         notifyDataSetChanged();
     }
 
-    public ArrayList<RxBleDevice> getDevices() {
+    public List<RxBleDevice> getDevices() {
         return devices;
     }
 

@@ -15,6 +15,7 @@ import com.example.ali.myapplication.R.id.*
 import com.github.karczews.rxbroadcastreceiver.RxBroadcastReceivers
 import com.jakewharton.rxbinding2.view.RxView
 import com.polidea.rxandroidble2.RxBleDevice
+import io.reactivex.Emitter
 import io.reactivex.Observable
 import io.reactivex.android.schedulers.AndroidSchedulers
 import io.reactivex.disposables.Disposable
@@ -34,8 +35,19 @@ class MainActivity : AppCompatActivity() {
 
     private var scanDisposable: Disposable? = null
     private val devices = HashMap<String, RxBleDevice>()
-    private var adapter: BleListAdapter? = null
+    private var adapter: BleListAdapter = BleListAdapter(listOf())
 
+    private val connectClickedObservable = Observable.create<RxBleDevice> { emitter ->
+        adapter.setListener { device ->
+            emitter.onNext(device)
+        }
+    }
+
+    private var acitivityPauseEmitter: Emitter<Boolean>? = null
+
+    private val activityPauseObservable = Observable.create<Boolean> { emitter ->
+        acitivityPauseEmitter = emitter
+    }
 
     private lateinit var valueTextView: TextView
     private var bleDisposable: Disposable? = null
@@ -49,6 +61,10 @@ class MainActivity : AppCompatActivity() {
                 listOf(
                         BleManager.scanFeedback(),
                         BleManager.connectFeedback(),
+                        BleManager.findNotifyCharacteristic(),
+                        BleManager.startReading(),
+                        BleManager.readNotifications(),
+                        BleManager.monitorBonding(),
                         bindBleUi
                 )
         ).subscribe()
@@ -60,8 +76,12 @@ class MainActivity : AppCompatActivity() {
                 bleState.source.map { it.isScanning }.subscribe { scan_progress.isGone = !it },
                 bleState.source.map { it.devices }.subscribe {
                     this.devices.putAll(it)
-                    adapter?.devices = it.values.toList()
-                }
+                    adapter.devices = it.values.toList()
+                },
+                bleState.source.map { it.deviceValues }.subscribe {
+                    txt_value.text = it?.infraredTemperature.toString()
+                },
+                bleState.source.map { it.selectedDeviceName }.subscribe { txt_connected_device_name.text = it }
         )
 
 
@@ -71,13 +91,19 @@ class MainActivity : AppCompatActivity() {
                             Log.d("BLE", "Scan button clicked")
                             BLEState.BLEEvent.Scan()
                         },
-                Observable.create<RxBleDevice> {
-                    adapter?.setListener { rxBleDevice ->
-                        it.onNext(rxBleDevice)
-                    }
-                }.map {
+                connectClickedObservable.map {
                     BLEState.BLEEvent.Connect(it)
+                },
+                activityPauseObservable.map { isPause ->
+                    if (isPause) {
+                        BLEState.BLEEvent.StopReading()
+                    } else {
+                        BLEState.BLEEvent.StartReading()
+                    }
+
                 }
+
+
         )
 
         return@bind Bindings(subscriptions, events)
@@ -97,100 +123,15 @@ class MainActivity : AppCompatActivity() {
     }
 
 
-    private fun testConnect(rxBleDevice: RxBleDevice) {
-        BleManager.connect(rxBleDevice)
-                .doOnNext {
-                    if (it.type != -1) {
-                        Log.d("BLE", "Started reading...")
-                        BleManager.startReading()
-                    }
-                }.subscribe({}, {})
-    }
-
-    private fun connect(rxBleDevice: RxBleDevice) {
-
-        BleManager.monitorBleConnection(rxBleDevice)
-
-        val connectionObservable = BleManager.connect(rxBleDevice)
-                .doOnNext {
-                    if (it.type != -1) {
-                        Log.d("BLE", "Started reading...")
-                        BleManager.startReading()
-                    }
-                }
-
-        if (rxBleDevice.macAddress.toLowerCase().endsWith("2f")) {
-            Log.d("BLE", "DEVICE DOESN'T REQUIRE BONDING")
-            connectionObservable.subscribe(
-                    {}
-                    ,
-                    { t: Throwable? ->
-                        t?.printStackTrace()
-                    }
-            )
-        } else if (rxBleDevice.bluetoothDevice.bondState == BOND_BONDED) {
-            Log.d("BLE", "DEVICE ALREADY BONDED ... PROCEEDING")
-            connectionObservable.subscribe(
-                    {}
-                    ,
-                    { t: Throwable? ->
-                        t?.printStackTrace()
-                    }
-            )
-        } else {
-            Log.d("BLE", "DEVICE REQUIRES BONDING ... WAITING FOR BOND...")
-            rxBleDevice.bluetoothDevice.createBond()
-            val bondStateObservable = RxBroadcastReceivers.fromIntentFilter(applicationContext, IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED))
-                    .subscribe(
-                            { intent ->
-                                val state = BleManager.bondingChanged(rxBleDevice, intent.extras)
-                                if (rxBleDevice.macAddress.toLowerCase().endsWith("2f") || rxBleDevice.bluetoothDevice.bondState == BOND_BONDED) {
-                                    Log.d("BLE", "DEVICE_BOND_BONDED!!!")
-
-                                    connectionObservable.subscribe(
-                                            {}
-                                            ,
-                                            { t: Throwable? ->
-                                                t?.printStackTrace()
-                                            }
-                                    )
-                                } else {
-                                    when (state) {
-                                        BluetoothDevice.BOND_BONDING -> {
-                                            Log.d("BLE", "DEVICE_BONDING")
-                                        }
-                                        BluetoothDevice.BOND_BONDED -> {
-                                            Log.d("BLE", "DEVICE_BONDED, trying to connect...")
-
-                                            connectionObservable.subscribe(
-                                                    {}
-                                                    ,
-                                                    { t: Throwable? ->
-                                                        t?.printStackTrace()
-                                                    })
-                                        }
-                                        BluetoothDevice.BOND_NONE -> {
-                                            Log.d("BLE", "DEVICE_BONDING_NONE")
-                                        }
-                                    }
-                                }
-                            },
-                            { t: Throwable? -> }
-                    )
-
-        }
-
-
-    }
-
     override fun onPause() {
-        BleManager.stopReading()
-        bleDisposable?.dispose()
+        acitivityPauseEmitter?.onNext(true)
+      //  bleDisposable?.dispose()
         super.onPause()
     }
 
     override fun onResume() {
-        subscirbeToBle()
+      //  subscirbeToBle()
+        acitivityPauseEmitter?.onNext(false)
         super.onResume()
     }
 

@@ -6,27 +6,25 @@ import android.bluetooth.BluetoothGattService
 import android.content.Context
 import android.os.Bundle
 import android.util.Log
-import com.example.ali.myapplication.BLEState
+import com.example.ali.myapplication.*
 import com.example.ali.myapplication.BLEState.BLEEvent
-import com.example.ali.myapplication.DeviceValues
-import com.example.ali.myapplication.deviceToConnect
-import com.example.ali.myapplication.scanTime
 import com.polidea.rxandroidble2.RxBleClient
 import com.polidea.rxandroidble2.RxBleConnection
 import com.polidea.rxandroidble2.RxBleDevice
+import com.polidea.rxandroidble2.RxBleDeviceServices
 import com.polidea.rxandroidble2.scan.ScanFilter
-import com.polidea.rxandroidble2.scan.ScanResult
 import com.polidea.rxandroidble2.scan.ScanSettings
 import io.reactivex.Observable
 import io.reactivex.android.schedulers.AndroidSchedulers
 import io.reactivex.disposables.Disposable
 import io.reactivex.schedulers.Schedulers
 import org.notests.rxfeedback.ObservableSchedulerContext
-import org.notests.rxfeedback.Observables
 import org.notests.rxfeedback.react
-import org.notests.rxfeedback.system
 import java.util.*
 import java.util.concurrent.TimeUnit
+
+typealias Feedback = (ObservableSchedulerContext<BLEState>) -> Observable<BLEState.BLEEvent>
+
 
 /**
  * Created by ali on 5/28/2018.
@@ -64,7 +62,7 @@ class BleManager {
         }
 
 
-        fun scanFeedback(): (ObservableSchedulerContext<BLEState>) -> Observable<BLEState.BLEEvent> {
+        fun scanFeedback(): Feedback {
             return react<BLEState, Long, BLEState.BLEEvent>(
                     query = { bleState: BLEState ->
                         bleState.scanTime()
@@ -78,7 +76,7 @@ class BleManager {
                                         .build()
                         )
                                 .takeUntil(Observable.timer(scanTime, TimeUnit.SECONDS))
-                                .map {scanResult->
+                                .map { scanResult ->
                                     BLEState.BLEEvent.FoundDevice(scanResult)
                                 }
                         Observable.concat(scanObservable, Observable.just(BLEEvent.FinishedScanning()))
@@ -86,7 +84,7 @@ class BleManager {
             )
         }
 
-        fun connectFeedback(): (ObservableSchedulerContext<BLEState>) -> Observable<BLEState.BLEEvent> {
+        fun connectFeedback(): Feedback {
             return react<BLEState, RxBleDevice, BLEEvent>(
                     query = { bleState: BLEState ->
                         bleState.deviceToConnect()
@@ -100,21 +98,72 @@ class BleManager {
             )
         }
 
+        fun findNotifyCharacteristic(): Feedback {
+            return react<BLEState, RxBleConnection, BLEEvent>(
+                    query = { bleState: BLEState ->
+                        bleState.connection()
+                    },
+                    effects = { rxBleConnection ->
+                        BleManager.connection = rxBleConnection
+                        rxBleConnection.discoverServices().toObservable()
+                                .flatMap { services: RxBleDeviceServices ->
+                                    services.getService(UUID.fromString(KEY_BLE_MAIN_SERVICE_UUID)).toObservable()
+                                }
+                                .map { service: BluetoothGattService ->
+                                    val notifyCharacteristic = service.getCharacteristic(UUID.fromString(KEY_BLE_NOTIFY_CHARACTERISTICS_UUID))
+                                    BLEEvent.FoundNotifyCharacateristic(notifyCharacteristic) as BLEEvent
+                                }
+
+                    }
+            )
+        }
+
+        fun readNotifications(): Feedback {
+            return react<BLEState, Observable<ByteArray>, BLEEvent>(
+                    query = { bleState: BLEState ->
+                        bleState.notificationObservable()
+                    },
+                    effects = { observable: Observable<ByteArray> ->
+                        observable.map { bytes ->
+                            BLEEvent.ReadNotification(bytes)
+                        }
+                    }
+            )
+        }
+
+        fun startReading(): Feedback {
+            return react<BLEState, BluetoothGattCharacteristic, BLEEvent>(
+                    query = { bleState: BLEState ->
+                        bleState.notifyChar()
+                    },
+                    effects = { notifyChar ->
+                        startTurnLaserOnCycle()
+                        connection!!.setupNotification(notifyChar)
+                                .map {
+                                    BLEEvent.GotNotificationObservable(it)
+                                }
+                    }
+            )
+        }
+
+        fun monitorBonding(): Feedback {
+            return react<BLEState, Boolean, BLEEvent>(
+                    query = { bleState: BLEState ->
+                        bleState.getBondingState()
+                    },
+                    effects = { isBonded ->
+                        if (isBonded) {
+                            Observable.just(BLEEvent.Bonded())
+                        }else{
+                            Observable.just(BLEEvent.Empty())
+                        }
+                    }
+            )
+        }
+
 
         //todo implement init that auto-selects a previously connected ble device
 
-        fun startScan(): Observable<ScanResult> {
-            return App.rxBleClient.scanBleDevices(
-                    ScanSettings.Builder()
-                            .setScanMode(ScanSettings.SCAN_MODE_BALANCED)
-                            .build(),
-                    ScanFilter.Builder()
-                            .build()
-            )
-                    .subscribeOn(Schedulers.io())
-                    .observeOn(AndroidSchedulers.mainThread())
-                    .takeUntil(Observable.timer(5, TimeUnit.SECONDS))
-        }
 
         @JvmStatic
         fun connect(device: RxBleDevice): Observable<BluetoothGattService> {
@@ -191,10 +240,6 @@ class BleManager {
                     )
         }
 
-        fun startReading() {
-            startNotifications()
-            startTurnLaserOnCycle()
-        }
 
         fun turnLasterOn() {
             val bytesToWrite = byteArrayOf(1)
@@ -214,19 +259,6 @@ class BleManager {
             if (notificationDisposable?.isDisposed == false) {
                 notificationDisposable?.dispose()
             }
-        }
-
-        fun monitorBleConnection(rxBleDevice: RxBleDevice) {
-            rxBleDevice.observeConnectionStateChanges()
-                    .subscribe(
-                            { state ->
-                                if (state != null) {
-                                    Log.d("BLE", state.toString())
-                                }
-                            },
-                            { t: Throwable? -> }
-                    )
-
         }
 
 

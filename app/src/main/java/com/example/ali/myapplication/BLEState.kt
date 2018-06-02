@@ -11,18 +11,34 @@ import io.reactivex.disposables.Disposable
 import org.notests.rxfeedback.Optional
 
 data class BLEState(var connectionState: ConnectionState = ConnectionState.disconnected,
-                    var bondingState: BondingState = BondingState.not_bonded,
-                    var isScanning: Boolean = false,
-                    var notifyCharacateristic: BluetoothGattCharacteristic? = null,
+                    var isScanning: Boolean = true,
+                    var readReadyStatus: ReadReadyStatus = ReadReadyStatus(true),
                     var selectedDevice: RxBleDevice? = null,
                     var selectedDeviceName: String = "",
                     var devices: HashMap<String, RxBleDevice> = HashMap(),
-                    var rxBleConnection: RxBleConnection? = null,
-                    var shouldRead: Boolean = true,
                     var notificationObservable: Observable<ByteArray>? = null,
                     var notificationDisposable: Disposable? = null,
                     var deviceValues: DeviceValues = DeviceValues()
 ) {
+
+    data class ReadReadyStatus(val enableRead: Boolean = false,
+                               val requiresBonding: Boolean = true,
+                               val bondingState: BondingState = BondingState.not_bonded,
+                               val notifyCharacteristic: BluetoothGattCharacteristic? = null,
+                               val rxBleConnection: RxBleConnection? = null) {
+        val isReady: Boolean
+            get() {
+                val requiresBondAndReady = requiresBonding
+                        && bondingState == BLEState.BondingState.bonded
+                        && enableRead
+                        && notifyCharacteristic != null
+
+                val noBondRequiredAndReady = !requiresBonding
+                        && enableRead
+                        && notifyCharacteristic != null
+                return enableRead && (requiresBondAndReady || noBondRequiredAndReady)
+            }
+    }
 
     enum class ConnectionState(name: String) {
         disconnected("disconnected"),
@@ -37,11 +53,6 @@ data class BLEState(var connectionState: ConnectionState = ConnectionState.disco
         waiting("waiting")
     }
 
-
-    val requiresBonding: Boolean
-        get() {
-            return selectedDevice?.macAddress?.toLowerCase()?.endsWith("1e") == true
-        }
 
     companion object {
         @JvmStatic
@@ -61,11 +72,11 @@ data class BLEState(var connectionState: ConnectionState = ConnectionState.disco
             Log.d("BLE", event.toString())
             when (event) {
                 is BLEEvent.StartReading -> {
-                    newState.shouldRead = true
+                    newState.readReadyStatus = newState.readReadyStatus.copy(enableRead = true)
                 }
 
                 is BLEEvent.StopReading -> {
-                    newState.shouldRead = false
+                    newState.readReadyStatus = newState.readReadyStatus.copy(enableRead = false)
                 }
 
                 is BLEState.BLEEvent.Scan -> {
@@ -76,14 +87,23 @@ data class BLEState(var connectionState: ConnectionState = ConnectionState.disco
                 is BLEState.BLEEvent.Connect -> {
                     newState.connectionState = ConnectionState.connecting
                     newState.selectedDevice = event.rxBleDevice
+                    newState.readReadyStatus =
+                            newState.readReadyStatus.copy(
+                                    requiresBonding = newState.selectedDevice?.macAddress?.toLowerCase()?.endsWith("1e") == true
+                            )
+
                     if (event.rxBleDevice.bluetoothDevice.bondState == BOND_BONDED) {
-                        newState.bondingState = BondingState.bonded
+                        newState.readReadyStatus = newState.readReadyStatus.copy(
+                                bondingState = BondingState.bonded
+                        )
                     }
                 }
 
                 is BLEEvent.Connected -> {
                     newState.connectionState = ConnectionState.connected
-                    newState.rxBleConnection = event.rxBleConnection
+                    newState.readReadyStatus = newState.readReadyStatus.copy(
+                            rxBleConnection = event.rxBleConnection
+                    )
                     newState.selectedDeviceName = newState.selectedDevice?.name ?: ""
                 }
 
@@ -95,12 +115,14 @@ data class BLEState(var connectionState: ConnectionState = ConnectionState.disco
                     newState.devices[device.macAddress] = device
                 }
 
-                is BLEState.BLEEvent.FoundNotifyCharacateristic -> {
+                is BLEState.BLEEvent.FoundNotifyCharacteristic -> {
                     Log.d("BLE", "Found notify characteristic")
-                    newState.notifyCharacateristic = event.notifyCharacateristic
+                    newState.readReadyStatus = newState.readReadyStatus.copy(
+                            notifyCharacteristic = event.notifyCharacateristic
+                    )
                 }
                 is BLEState.BLEEvent.Bonded -> {
-                    newState.bondingState = BondingState.bonded
+                    newState.readReadyStatus = newState.readReadyStatus.copy(bondingState = BondingState.bonded)
                 }
                 is BLEState.BLEEvent.GotNotificationObservable -> {
                     newState.notificationObservable = event.notificationObservable
@@ -137,7 +159,7 @@ data class BLEState(var connectionState: ConnectionState = ConnectionState.disco
         //BLE
 
         data class FoundDevice(val scanResult: ScanResult) : BLEEvent()
-        class FoundNotifyCharacateristic(val notifyCharacateristic: BluetoothGattCharacteristic?) : BLEEvent()
+        class FoundNotifyCharacteristic(val notifyCharacateristic: BluetoothGattCharacteristic?) : BLEEvent()
         class Bonded() : BLEEvent()
         class Connected(val rxBleConnection: RxBleConnection) : BLEEvent()
         class GotNotificationObservable(val notificationObservable: Observable<ByteArray>) : BLEEvent()
@@ -151,7 +173,7 @@ data class BLEState(var connectionState: ConnectionState = ConnectionState.disco
 
 fun BLEState.scanTime(): Optional<Long> {
     return if (isScanning) {
-        Optional.Some(5)
+        Optional.Some(1)
     } else {
         Optional.None()
     }
@@ -167,7 +189,7 @@ fun BLEState.deviceToConnect(): Optional<RxBleDevice> {
 }
 
 fun BLEState.connection(): Optional<RxBleConnection> {
-    val connection = rxBleConnection
+    val connection = readReadyStatus.rxBleConnection
     return if (connection != null) {
         Optional.Some(connection)
     } else {
@@ -175,14 +197,9 @@ fun BLEState.connection(): Optional<RxBleConnection> {
     }
 }
 
-fun BLEState.notifyChar(): Optional<BluetoothGattCharacteristic> {
-    val notifyChar = this.notifyCharacateristic
-    return if ((requiresBonding && bondingState == BLEState.BondingState.bonded && notifyChar != null)
-            || (!requiresBonding && notifyChar != null)) {
-        Optional.Some(notifyChar)
-    } else {
-        Optional.None()
-    }
+fun BLEState.readReadyStatus(): Optional<BLEState.ReadReadyStatus> {
+    val readReadyStatus = this.readReadyStatus
+    return Optional.Some(readReadyStatus)
 }
 
 fun BLEState.notificationObservable(): Optional<Observable<ByteArray>> {

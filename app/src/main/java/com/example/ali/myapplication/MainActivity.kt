@@ -1,24 +1,18 @@
 package com.example.ali.myapplication
 
-import android.bluetooth.BluetoothDevice
-import android.bluetooth.BluetoothDevice.BOND_BONDED
 import android.content.Intent
-import android.content.IntentFilter
 import android.os.Bundle
-import android.support.v4.content.ContextCompat.startActivity
 import android.support.v7.app.AppCompatActivity
 import android.util.Log
-import android.view.View
 import android.widget.TextView
 import com.example.ali.blemanager.BleManager
-import com.example.ali.myapplication.R.id.*
-import com.github.karczews.rxbroadcastreceiver.RxBroadcastReceivers
 import com.jakewharton.rxbinding2.view.RxView
 import com.polidea.rxandroidble2.RxBleDevice
 import io.reactivex.Emitter
 import io.reactivex.Observable
 import io.reactivex.android.schedulers.AndroidSchedulers
 import io.reactivex.disposables.Disposable
+import io.reactivex.schedulers.Schedulers
 import kotlinx.android.synthetic.main.activity_main.*
 import org.notests.rxfeedback.Bindings
 import org.notests.rxfeedback.Observables
@@ -53,7 +47,7 @@ class MainActivity : AppCompatActivity() {
     private var bleDisposable: Disposable? = null
 
 
-    fun subscirbeToBle(): Disposable {
+    fun subscribeToBle(): Disposable {
         return Observables.system(
                 BLEState.initial(),
                 BLEState.Companion::reduce,
@@ -62,12 +56,13 @@ class MainActivity : AppCompatActivity() {
                         BleManager.scanFeedback(),
                         BleManager.connectFeedback(),
                         BleManager.findNotifyCharacteristic(),
-                        BleManager.startReading(),
+                        BleManager.startOrStopReading(),
                         BleManager.readNotifications(),
                         BleManager.monitorBonding(),
                         bindBleUi
                 )
-        ).subscribe()
+        )
+                .subscribe()
     }
 
     val bindBleUi = bind<BLEState, BLEState.BLEEvent> { bleState ->
@@ -91,7 +86,7 @@ class MainActivity : AppCompatActivity() {
                             Log.d("BLE", "Scan button clicked")
                             BLEState.BLEEvent.Scan()
                         },
-                connectClickedObservable.map {
+                connectClickedObservable.subscribeOn(Schedulers.io()).map {
                     BLEState.BLEEvent.Connect(it)
                 },
                 activityPauseObservable.map { isPause ->
@@ -113,24 +108,22 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-        bleDisposable = subscirbeToBle()
+        bleDisposable = subscribeToBle()
         valueTextView = txt_value
         adapter = BleListAdapter(listOf<RxBleDevice>())
         listview_ble_devices.adapter = adapter
-
-
         btn_new_activity.setOnClickListener { startActivity(Intent(this, TestActivity::class.java)) }
     }
 
 
     override fun onPause() {
         acitivityPauseEmitter?.onNext(true)
-      //  bleDisposable?.dispose()
+        //bleDisposable?.dispose()
         super.onPause()
     }
 
     override fun onResume() {
-      //  subscirbeToBle()
+        //subscribeToBle()
         acitivityPauseEmitter?.onNext(false)
         super.onResume()
     }

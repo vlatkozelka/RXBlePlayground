@@ -42,7 +42,7 @@ class MyLifecycleHandler : Application.ActivityLifecycleCallbacks {
                 if (isApplicationInForeground) {
 
                 } else {
-                    BleManager.disconnect()
+                   // BleManager.disconnect()
                 }
             }
     }

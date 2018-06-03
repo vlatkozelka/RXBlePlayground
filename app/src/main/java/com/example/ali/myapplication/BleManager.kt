@@ -1,8 +1,8 @@
 package com.example.ali.blemanager
 
-import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattService
 import android.content.Context
+import android.util.Log
 import com.example.ali.myapplication.*
 import com.example.ali.myapplication.BLEState.BLEEvent
 import com.polidea.rxandroidble2.RxBleClient
@@ -11,6 +11,7 @@ import com.polidea.rxandroidble2.RxBleDevice
 import com.polidea.rxandroidble2.RxBleDeviceServices
 import com.polidea.rxandroidble2.scan.ScanFilter
 import com.polidea.rxandroidble2.scan.ScanSettings
+import io.reactivex.Emitter
 import io.reactivex.Observable
 import io.reactivex.disposables.Disposable
 import io.reactivex.schedulers.Schedulers
@@ -38,8 +39,10 @@ class BleManager {
         private lateinit var rxBleClient: RxBleClient
         private val timer = Observable.interval(0, 20, TimeUnit.SECONDS)
         private var laserDisposable: Disposable? = null
+        private var connectionDisposable: Disposable? = null
         private lateinit var appContext: Context
         private var state: BLEState = BLEState.initial()
+
 
 
         @JvmStatic
@@ -78,20 +81,38 @@ class BleManager {
         }
 
         /**
-         * queries selected device to connect to
-         * If that returns a device. BLE will attempt to connect to it
-         * then emit a Connected Event
+         * queries connection readyness
+         * If a ready status is return, it attempts to connect then emits a Connected event
+         *
+         * else it disconnects and emits a Disconnected Event
          */
         fun connectFeedback(): Feedback {
-            return react<BLEState, RxBleDevice, BLEEvent>(
+            return react<BLEState, BLEState.ConnectReadyStatus, BLEEvent>(
                     query = { bleState: BLEState ->
-                        bleState.deviceToConnect()
+                        bleState.connectReadyStatus()
                     },
-                    effects = { rxBleDevice ->
-                        rxBleDevice.establishConnection(false)
-                                .map { connection: RxBleConnection ->
-                                    BLEEvent.Connected(connection)
-                                }
+                    effects = { connectReadyStatus ->
+                        val selectedDevice = connectReadyStatus.selectedDevice
+                        if (connectReadyStatus.isReady && selectedDevice != null) {
+                            selectedDevice.establishConnection(false)
+                                    .doOnSubscribe {
+                                        connectionDisposable = it
+                                        //BLEEvent.SubscribedToConnection(it)
+                                    }
+                                    .map { connection: RxBleConnection ->
+                                        Log.d("BLE","Connection ready!")
+                                        BLEEvent.Connected(connection)
+                                    }
+                        } else {
+                            Log.d("BLE","NOT Connection ready!")
+                            disconnect()
+                            Observable.just(BLEEvent.Disconnected())
+                        }
+
+
+                    },
+                    areEqual = { status1, status2 ->
+                        status1.isReady == status2.isReady
                     }
             )
         }
@@ -136,19 +157,20 @@ class BleManager {
                         val notifyChar = readReadyStatus.notifyCharacteristic
                         if (connection != null && notifyChar != null) {
                             if (readReadyStatus.isReady) {
+                                Log.d("BLE","Ready to read!")
                                 startTurnLaserOnCycle(connection)
                                 connection.setupNotification(notifyChar)
                                         .map {
+                                            //return here
                                             BLEEvent.GotNotificationObservable(it) as BLEEvent
                                         }
                             } else {
+                                Log.d("BLE","NOT Ready to read!")
                                 stopReading(connection)
-                                Observable.just(BLEEvent.Empty() as BLEEvent)
                             }
-                        } else {
-                            Observable.just(BLEEvent.Empty())
                         }
-
+                        //or return default
+                        Observable.just(BLEEvent.Empty() as BLEEvent)
 
                     },
                     areEqual = { status1, status2 ->
@@ -157,6 +179,10 @@ class BleManager {
             )
         }
 
+        /**
+         * Reads from the notificationObservable saved in ble state and emits the read
+         * bytes if available
+         */
         fun readNotifications(): Feedback {
             return react<BLEState, Observable<ByteArray>, BLEEvent>(
                     query = { bleState: BLEState ->
@@ -171,6 +197,9 @@ class BleManager {
         }
 
 
+        /**
+         * Monitors BLE bond state
+         */
         fun monitorBonding(): Feedback {
             return react<BLEState, Boolean, BLEEvent>(
                     query = { bleState: BLEState ->
@@ -217,6 +246,12 @@ class BleManager {
 
             if (laserDisposable?.isDisposed == false) {
                 laserDisposable?.dispose()
+            }
+        }
+
+        fun disconnect() {
+            if (connectionDisposable?.isDisposed != true) {
+                connectionDisposable?.dispose()
             }
         }
     }

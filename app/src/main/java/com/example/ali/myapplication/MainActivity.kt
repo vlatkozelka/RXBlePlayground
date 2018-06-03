@@ -6,6 +6,7 @@ import android.support.v7.app.AppCompatActivity
 import android.util.Log
 import android.widget.TextView
 import com.example.ali.blemanager.BleManager
+import com.example.ali.blemanager.MyLifecycleHandler
 import com.jakewharton.rxbinding2.view.RxView
 import com.polidea.rxandroidble2.RxBleDevice
 import io.reactivex.Emitter
@@ -26,8 +27,6 @@ import java.util.*
 
 class MainActivity : AppCompatActivity() {
 
-
-    private var scanDisposable: Disposable? = null
     private val devices = HashMap<String, RxBleDevice>()
     private var adapter: BleListAdapter = BleListAdapter(listOf())
 
@@ -96,6 +95,9 @@ class MainActivity : AppCompatActivity() {
                         BLEState.BLEEvent.StartReading()
                     }
 
+                },
+                MyLifecycleHandler.enableConnectObservable.map { enableConnect: Boolean ->
+                    BLEState.BLEEvent.EnableOrDisableConnect(enableConnect)
                 }
 
 
